@@ -204,6 +204,81 @@ python inspect_pretrained_medvae_cxr.py \
   --out "runs/pretrained_medvae_native256_pad_same10_$(date +%Y%m%d_%H%M%S)"
 ```
 
+## S2: Frozen MedVAE 接入 Fusion
+
+S2 保持两个 latent 的职责分离：
+
+```text
+512x512 padded CXR
+  -> frozen MedVAE 4x
+  -> z_spatial (3x128x128)
+       |-> frozen MedVAE decoder -> CXR reconstruction
+       `-> CNN pooling projector -> z_cxr_global (768)
+
+z_cxr_global + EHR representation + report representation
+  -> existing cross-modal fusion
+  -> z_global (512)
+```
+
+这里的 `z_cxr_global` 是一个连续向量，不是离散 token，也没有
+codebook/VQ。高分辨率空间信息仍保留在独立的 `z_spatial` 中。
+
+MedVAE 和 ClinicalBERT 默认冻结。旧 checkpoint 中的 EHR encoder、
+report encoder、fusion、EHR decoder 和 report decoder会被复用；旧 ViT CXR
+encoder 被新的 MedVAE projector 替换。
+
+先只跑 forward smoke test，不训练：
+
+```bash
+STAMP=$(date +%Y%m%d_%H%M%S)
+OUT="runs/medvae_fusion_s2_smoke_${STAMP}"
+
+python train_medvae_fusion.py \
+  --features ../datasets/vlm_radiology_report_generation/output/mimic_cxr_features.parquet \
+  --cxr-root ../datasets/vlm_radiology_report_generation/mimic-cxr-jpg-2.1.0.physionet.org \
+  --multimodal-ckpt /project2/ruishanl_1185/Med-Syn-Gen-2/runs/inspect/ckpt_best.pt \
+  --output "$OUT" \
+  --image-size 512 \
+  --batch-size 1 \
+  --num-workers 4 \
+  --limit-train-rows 20 \
+  --limit-val-rows 10 \
+  --max-val-batches 2 \
+  --max-steps 0 \
+  2>&1 | tee "${OUT}.log"
+```
+
+预期关键 shape：
+
+```text
+image      = (B, 3, 512, 512)
+z_spatial  = (B, 3, 128, 128)
+z_cxr_global = (B, 768)
+z_global   = (B, 512)
+```
+
+smoke test 通过后，再做 100-step adapter debug：
+
+```bash
+STAMP=$(date +%Y%m%d_%H%M%S)
+OUT="runs/medvae_fusion_s2_debug100_${STAMP}"
+
+python train_medvae_fusion.py \
+  --features ../datasets/vlm_radiology_report_generation/output/mimic_cxr_features.parquet \
+  --cxr-root ../datasets/vlm_radiology_report_generation/mimic-cxr-jpg-2.1.0.physionet.org \
+  --multimodal-ckpt /project2/ruishanl_1185/Med-Syn-Gen-2/runs/inspect/ckpt_best.pt \
+  --output "$OUT" \
+  --image-size 512 \
+  --batch-size 2 \
+  --num-workers 4 \
+  --limit-train-rows 1000 \
+  --limit-val-rows 200 \
+  --max-val-batches 10 \
+  --max-steps 100 \
+  --val-every 50 \
+  2>&1 | tee "${OUT}.log"
+```
+
 ## S1: 接回三模态 shared latent
 
 S1 使用：
