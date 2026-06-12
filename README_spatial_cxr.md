@@ -104,3 +104,41 @@ CXR decoder input:
 ```
 
 之后再把 CXR spatial decoder 替换为 conditional latent diffusion。
+
+## S1: 接回三模态 shared latent
+
+S1 使用：
+
+```text
+normalized CXR ─┐
+EHR ────────────┼→ PatientEncoder → z_patient_global
+report ─────────┘
+
+pixel CXR → spatial encoder → z_cxr_spatial
+
+CXR decoder(z_cxr_spatial, FiLM(z_patient_global))
+EHR decoder(z_patient_global)
+report decoder(z_patient_global)
+```
+
+`train_spatial_multimodal.py` 会同时加载：
+
+- S0 的 `ckpt_best.pt`
+- 原三模态模型的 `ckpt_best.pt`
+
+默认冻结 ViT、ClinicalBERT、spatial encoder 和 spatial decoder 主体，只训练
+fusion/EHR encoder/EHR decoder/report decoder/FiLM。这样先验证两条 latent
+路径可以稳定接在一起，不立即破坏 S0 的 CXR 重建。
+
+验证日志还会报告：
+
+- `shuffle_delta`: 把其他患者的 global condition 换进来后 MAE 增量
+- `zero_delta`: 去掉 global condition 后 MAE 增量
+
+正值表示正确的 `z_patient_global` 确实对 CXR reconstruction 有帮助。
+
+S1 分开保存：
+
+- `ckpt_best_joint.pt`: 加权三模态 validation loss 最优
+- `ckpt_best_cxr.pt`: CXR validation loss 最优
+- `ckpt_last.pt`: 最后一步
