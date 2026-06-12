@@ -142,6 +142,52 @@ CXR decoder input:
 
 之后再把 CXR spatial decoder 替换为 conditional latent diffusion。
 
+## S0.6: 预训练医学 VAE 对比
+
+在继续训练 diffusion 前，先检查图像 autoencoder 本身的重建上限。
+这里使用 Stanford MIMI 的 MedVAE，并保持 continuous spatial latent，
+不采用离散 tokenizer。
+
+推荐同时比较：
+
+- `medvae_8_4_2d`: `224x224 -> 4x28x28`，与当前 spatial latent
+  形状完全相同，可以作为直接替换候选。
+- `medvae_4_3_2d`: `224x224 -> 3x56x56`，用来测试更低压缩率能够带来
+  多大的肉眼改善。
+
+MedVAE 依赖较多，建议在单独环境中安装，避免改变原训练环境的
+PyTorch 版本：
+
+```bash
+module purge
+module load python/3.11.9
+python -m venv ~/envs/medvae_eval_env
+source ~/envs/medvae_eval_env/bin/activate
+python -m pip install --upgrade pip
+python -m pip install medvae pyarrow
+```
+
+在 GPU 节点运行固定 test10 对比：
+
+```bash
+STAMP=$(date +%Y%m%d_%H%M%S)
+OUT="runs/pretrained_medvae_same10_${STAMP}"
+
+python inspect_pretrained_medvae_cxr.py \
+  --features ../datasets/vlm_radiology_report_generation/output/mimic_cxr_features.parquet \
+  --cxr-root ../datasets/vlm_radiology_report_generation/mimic-cxr-jpg-2.1.0.physionet.org \
+  --local-ckpt runs/spatial_cxr_sharp_4x28x28_20260612_094858/ckpt_best.pt \
+  --medvae-models medvae_8_4_2d,medvae_4_3_2d \
+  --split test \
+  --source-indices 10615,89249,11071,75129,50337,49949,80335,11806,22798,99360 \
+  --out "$OUT" \
+  2>&1 | tee "${OUT}.log"
+```
+
+第一次运行会从官方 Hugging Face repository 下载 MedVAE 权重。脚本使用
+posterior mode 而非随机采样，保证不同模型在同一批样本上的重建比较可重复。
+输出包含逐样本 comparison panel、`metrics.csv` 和 `summary.json`。
+
 ## S1: 接回三模态 shared latent
 
 S1 使用：
