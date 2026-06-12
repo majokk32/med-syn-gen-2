@@ -23,7 +23,6 @@ Output: (B, latent_dim) — the patient latent z.
 
 from __future__ import annotations
 
-import timm
 import torch
 import torch.nn as nn
 from transformers import AutoModel
@@ -152,6 +151,7 @@ class PatientEncoder(nn.Module):
         fusion_heads: int = 8,
     ):
         super().__init__()
+        import timm
 
         # ---- 1. CXR backbone (timm ViT-B/16) ----
         self.cxr = timm.create_model(
