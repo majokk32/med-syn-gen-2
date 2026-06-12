@@ -223,6 +223,7 @@ def train(args):
         global_dim=args.global_dim,
         spatial_channels=args.spatial_channels,
         spatial_base_channels=args.spatial_base_channels,
+        spatial_upsample_mode=args.spatial_upsample_mode,
     )
     spatial_state = load_s0_spatial_checkpoint(model, args.spatial_ckpt)
     multimodal_state = load_multimodal_checkpoint(
@@ -349,6 +350,11 @@ if __name__ == "__main__":
     parser.add_argument("--global-dim", type=int, default=512)
     parser.add_argument("--spatial-channels", type=int, default=4)
     parser.add_argument("--spatial-base-channels", type=int, default=32)
+    parser.add_argument(
+        "--spatial-upsample-mode",
+        choices=["bilinear", "nearest"],
+        default="bilinear",
+    )
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--max-steps", type=int, default=200)

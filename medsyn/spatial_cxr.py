@@ -149,17 +149,24 @@ class SpatialCXREncoder(nn.Module):
 class SpatialCXRDecoder(nn.Module):
     """28x28 spatial latent to a 224x224 CXR."""
 
-    def __init__(self, latent_channels: int = 4, base_channels: int = 32):
+    def __init__(
+        self,
+        latent_channels: int = 4,
+        base_channels: int = 32,
+        upsample_mode: str = "bilinear",
+    ):
         super().__init__()
+        if upsample_mode not in {"bilinear", "nearest"}:
+            raise ValueError("upsample_mode must be bilinear or nearest")
         b = base_channels
         self.in_proj = nn.Conv2d(latent_channels, 4 * b, 3, padding=1)
         self.mid = nn.Sequential(
             ResidualBlock(4 * b),
             ResidualBlock(4 * b),
         )
-        self.up1 = self._up_block(4 * b, 2 * b)  # 28 -> 56
-        self.up2 = self._up_block(2 * b, b)      # 56 -> 112
-        self.up3 = self._up_block(b, b)          # 112 -> 224
+        self.up1 = self._up_block(4 * b, 2 * b, upsample_mode)  # 28 -> 56
+        self.up2 = self._up_block(2 * b, b, upsample_mode)      # 56 -> 112
+        self.up3 = self._up_block(b, b, upsample_mode)          # 112 -> 224
         self.out = nn.Sequential(
             nn.GroupNorm(8, b),
             nn.SiLU(),
@@ -168,9 +175,17 @@ class SpatialCXRDecoder(nn.Module):
         )
 
     @staticmethod
-    def _up_block(c_in: int, c_out: int) -> nn.Sequential:
+    def _up_block(
+        c_in: int, c_out: int, upsample_mode: str
+    ) -> nn.Sequential:
+        if upsample_mode == "bilinear":
+            upsample = nn.Upsample(
+                scale_factor=2, mode="bilinear", align_corners=False
+            )
+        else:
+            upsample = nn.Upsample(scale_factor=2, mode="nearest")
         return nn.Sequential(
-            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+            upsample,
             nn.Conv2d(c_in, c_out, 3, padding=1),
             ResidualBlock(c_out),
         )
@@ -184,10 +199,17 @@ class SpatialCXRDecoder(nn.Module):
 
 
 class SpatialCXRAutoencoder(nn.Module):
-    def __init__(self, latent_channels: int = 4, base_channels: int = 32):
+    def __init__(
+        self,
+        latent_channels: int = 4,
+        base_channels: int = 32,
+        upsample_mode: str = "bilinear",
+    ):
         super().__init__()
         self.encoder = SpatialCXREncoder(latent_channels, base_channels)
-        self.decoder = SpatialCXRDecoder(latent_channels, base_channels)
+        self.decoder = SpatialCXRDecoder(
+            latent_channels, base_channels, upsample_mode
+        )
 
     def encode(self, image: torch.Tensor) -> torch.Tensor:
         return self.encoder(image)
@@ -204,10 +226,16 @@ class SpatialCXRAutoencoder(nn.Module):
         image: torch.Tensor,
         edge_weight: float = 0.10,
         ssim_weight: float = 0.20,
+        laplacian_weight: float = 0.0,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         recon, latent = self(image)
         return self.reconstruction_loss(
-            image, recon, latent, edge_weight, ssim_weight
+            image,
+            recon,
+            latent,
+            edge_weight,
+            ssim_weight,
+            laplacian_weight,
         )
 
     def reconstruction_loss(
@@ -217,16 +245,28 @@ class SpatialCXRAutoencoder(nn.Module):
         latent: torch.Tensor,
         edge_weight: float = 0.10,
         ssim_weight: float = 0.20,
+        laplacian_weight: float = 0.0,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         l1 = F.l1_loss(recon, image)
         edge = image_gradient_loss(recon, image)
         ssim = structural_similarity(recon, image)
-        total = l1 + edge_weight * edge + ssim_weight * (1.0 - ssim)
+        laplacian = (
+            laplacian_pyramid_loss(recon, image)
+            if laplacian_weight > 0
+            else recon.new_zeros(())
+        )
+        total = (
+            l1
+            + edge_weight * edge
+            + ssim_weight * (1.0 - ssim)
+            + laplacian_weight * laplacian
+        )
         stats = {
             "loss": total,
             "l1": l1,
             "edge": edge,
             "ssim": ssim,
+            "laplacian": laplacian,
             "latent_mean": latent.mean(),
             "latent_std": latent.std(),
         }
@@ -239,6 +279,39 @@ def image_gradient_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tenso
     target_dx = target[:, :, :, 1:] - target[:, :, :, :-1]
     target_dy = target[:, :, 1:, :] - target[:, :, :-1, :]
     return F.l1_loss(pred_dx, target_dx) + F.l1_loss(pred_dy, target_dy)
+
+
+def laplacian_pyramid_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    levels: int = 3,
+) -> torch.Tensor:
+    """Compare high-frequency residuals at several image scales."""
+    total = pred.new_zeros(())
+    pred_level = pred
+    target_level = target
+    for level in range(levels):
+        pred_down = F.avg_pool2d(
+            pred_level, kernel_size=2, stride=2, ceil_mode=True
+        )
+        target_down = F.avg_pool2d(
+            target_level, kernel_size=2, stride=2, ceil_mode=True
+        )
+        pred_up = F.interpolate(
+            pred_down, size=pred_level.shape[-2:], mode="bilinear",
+            align_corners=False,
+        )
+        target_up = F.interpolate(
+            target_down, size=target_level.shape[-2:], mode="bilinear",
+            align_corners=False,
+        )
+        weight = 2.0 ** level
+        total = total + weight * F.l1_loss(
+            pred_level - pred_up, target_level - target_up
+        )
+        pred_level = pred_down
+        target_level = target_down
+    return total / sum(2.0 ** level for level in range(levels))
 
 
 def structural_similarity(

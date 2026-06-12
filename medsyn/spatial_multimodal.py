@@ -110,8 +110,9 @@ class ConditionalSpatialCXRDecoder(SpatialCXRDecoder):
         latent_channels: int = 4,
         base_channels: int = 32,
         condition_dim: int = 512,
+        upsample_mode: str = "bilinear",
     ):
-        super().__init__(latent_channels, base_channels)
+        super().__init__(latent_channels, base_channels, upsample_mode)
         b = base_channels
         self.film_mid = FiLM(condition_dim, 4 * b)
         self.film_up1 = FiLM(condition_dim, 2 * b)
@@ -153,6 +154,7 @@ class SpatialMultimodalAutoencoder(nn.Module):
         global_dim: int = 512,
         spatial_channels: int = 4,
         spatial_base_channels: int = 32,
+        spatial_upsample_mode: str = "bilinear",
     ):
         super().__init__()
         self.global_encoder = PatientEncoder(
@@ -167,6 +169,7 @@ class SpatialMultimodalAutoencoder(nn.Module):
             latent_channels=spatial_channels,
             base_channels=spatial_base_channels,
             condition_dim=global_dim,
+            upsample_mode=spatial_upsample_mode,
         )
         self.ehr_decoder = TabularEHRDecoder(latent_dim=global_dim)
         self.note_decoder = NotesDecoder(

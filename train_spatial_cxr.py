@@ -40,7 +40,13 @@ def make_loader(dataset, batch_size, num_workers, shuffle, drop_last):
 
 @torch.no_grad()
 def evaluate(
-    model, loader, device, max_batches, edge_weight, ssim_weight
+    model,
+    loader,
+    device,
+    max_batches,
+    edge_weight,
+    ssim_weight,
+    laplacian_weight,
 ):
     model.eval()
     totals = {"loss": 0.0, "mae": 0.0, "psnr": 0.0, "ssim": 0.0}
@@ -52,7 +58,12 @@ def evaluate(
         image = image.to(device, non_blocking=True)
         recon, latent = model(image)
         loss, _ = model.reconstruction_loss(
-            image, recon, latent, edge_weight, ssim_weight
+            image,
+            recon,
+            latent,
+            edge_weight,
+            ssim_weight,
+            laplacian_weight,
         )
         metrics = reconstruction_metrics(recon, image)
         n = image.size(0)
@@ -119,6 +130,7 @@ def train(args):
     model = SpatialCXRAutoencoder(
         latent_channels=args.latent_channels,
         base_channels=args.base_channels,
+        upsample_mode=args.upsample_mode,
     ).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.lr, weight_decay=args.weight_decay
@@ -138,8 +150,14 @@ def train(args):
         model.load_state_dict(state["model"])
         optimizer.load_state_dict(state["optimizer"])
         start_step = int(state["step"])
-        best_val = float(state["best_val"])
+        best_val = (
+            float("inf")
+            if args.reset_best
+            else float(state["best_val"])
+        )
         print(f"resumed {args.resume} at step {start_step}", flush=True)
+        if args.reset_best:
+            print("reset validation best for the new objective", flush=True)
 
     amp_enabled = args.amp and device.type == "cuda"
     scaler = torch.cuda.amp.GradScaler(enabled=amp_enabled)
@@ -160,6 +178,7 @@ def train(args):
                 image,
                 edge_weight=args.edge_weight,
                 ssim_weight=args.ssim_weight,
+                laplacian_weight=args.laplacian_weight,
             )
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -174,6 +193,7 @@ def train(args):
                 f"l1={float(stats['l1']):.4f} "
                 f"edge={float(stats['edge']):.4f} "
                 f"ssim={float(stats['ssim']):.4f} "
+                f"lap={float(stats['laplacian']):.4f} "
                 f"z_mean={float(stats['latent_mean']):.4f} "
                 f"z_std={float(stats['latent_std']):.4f}",
                 flush=True,
@@ -187,6 +207,7 @@ def train(args):
                 args.max_val_batches,
                 args.edge_weight,
                 args.ssim_weight,
+                args.laplacian_weight,
             )
             print(
                 f"[validation] step={step:5d} "
@@ -218,9 +239,15 @@ if __name__ == "__main__":
     parser.add_argument("--cxr-root", required=True)
     parser.add_argument("--output", default="runs/spatial_cxr")
     parser.add_argument("--resume")
+    parser.add_argument("--reset-best", action="store_true")
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--latent-channels", type=int, default=4)
     parser.add_argument("--base-channels", type=int, default=32)
+    parser.add_argument(
+        "--upsample-mode",
+        choices=["bilinear", "nearest"],
+        default="bilinear",
+    )
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--num-workers", type=int, default=8)
     parser.add_argument("--max-steps", type=int, default=2000)
@@ -228,6 +255,7 @@ if __name__ == "__main__":
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--edge-weight", type=float, default=0.10)
     parser.add_argument("--ssim-weight", type=float, default=0.20)
+    parser.add_argument("--laplacian-weight", type=float, default=0.0)
     parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--log-every", type=int, default=20)
     parser.add_argument("--val-every", type=int, default=200)

@@ -93,6 +93,43 @@ real | reconstruction | absolute error × 3
 - SSIM / PSNR 高于旧的 global-vector CXR decoder
 - `latent_std` 不接近 0，避免 latent collapse
 
+## S0.5: 减少重建模糊
+
+如果增加 latent channels 没有明显改善，优先微调 decoder 和高频 loss：
+
+```text
+bilinear upsample → nearest upsample + learned convolution
+L1/edge/SSIM      → L1/edge/SSIM + multi-scale Laplacian
+```
+
+这一步不使用 skip connection，也不引入 GAN，因此不会绕过 spatial latent，
+同时比 adversarial sharpening 更不容易制造不存在的医学细节。
+
+从 4-channel S0 best checkpoint 继续微调：
+
+```bash
+STAMP=$(date +%Y%m%d_%H%M%S)
+OUT="runs/spatial_cxr_sharp_4x28x28_${STAMP}"
+
+python train_spatial_cxr.py \
+  --features ../datasets/vlm_radiology_report_generation/output/mimic_cxr_features.parquet \
+  --cxr-root ../datasets/vlm_radiology_report_generation/mimic-cxr-jpg-2.1.0.physionet.org \
+  --resume runs/spatial_cxr_4x28x28_20260611/ckpt_best.pt \
+  --reset-best \
+  --output "$OUT" \
+  --latent-channels 4 \
+  --upsample-mode nearest \
+  --laplacian-weight 0.20 \
+  --batch-size 32 \
+  --num-workers 4 \
+  --max-steps 2600 \
+  --val-every 100 \
+  --seed 42 \
+  2>&1 | tee "${OUT}.log"
+```
+
+旧 checkpoint 是 step 1800，因此 `max-steps 2600` 表示继续微调 800 steps。
+
 如果 S0 成立，下一步才做 S1：
 
 ```text

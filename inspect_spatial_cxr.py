@@ -56,10 +56,12 @@ def main():
     image_size = int(config.get("image_size", 224))
     latent_channels = int(config.get("latent_channels", 4))
     base_channels = int(config.get("base_channels", 32))
+    upsample_mode = str(config.get("upsample_mode", "bilinear"))
 
     model = SpatialCXRAutoencoder(
         latent_channels=latent_channels,
         base_channels=base_channels,
+        upsample_mode=upsample_mode,
     ).to(device)
     model.load_state_dict(state["model"])
     model.eval()
