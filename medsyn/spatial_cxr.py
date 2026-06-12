@@ -24,6 +24,7 @@ import torch.nn.functional as F
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
+from torchvision.transforms import functional as TF
 
 from .data import cxr_path
 
@@ -47,7 +48,10 @@ class SpatialCXRDataset(Dataset):
         split: Optional[str] = None,
         train: bool = False,
         limit: Optional[int] = None,
+        resize_mode: str = "crop",
     ):
+        if resize_mode not in {"crop", "pad"}:
+            raise ValueError("resize_mode must be crop or pad")
         df = pd.read_parquet(parquet_path).copy()
         df["_source_index"] = range(len(df))
 
@@ -68,7 +72,12 @@ class SpatialCXRDataset(Dataset):
         self.df = df.reset_index(drop=True)
         self.cxr_root = cxr_root
 
-        if train:
+        if resize_mode == "pad":
+            self.transform = transforms.Compose([
+                ResizeAndPad(image_size),
+                transforms.ToTensor(),
+            ])
+        elif train:
             self.transform = transforms.Compose([
                 transforms.Resize(int(image_size * 1.05)),
                 transforms.RandomCrop(image_size),
@@ -105,6 +114,34 @@ class SpatialCXRDataset(Dataset):
                 f"source row {source_index} is not present in this split"
             )
         return int(matches[0])
+
+
+class ResizeAndPad:
+    """Fit the full image inside a square without changing aspect ratio."""
+
+    def __init__(self, size: int, fill: int = 0):
+        self.size = size
+        self.fill = fill
+
+    def __call__(self, image: Image.Image) -> Image.Image:
+        width, height = image.size
+        scale = self.size / max(width, height)
+        resized_width = max(1, round(width * scale))
+        resized_height = max(1, round(height * scale))
+        image = TF.resize(
+            image,
+            [resized_height, resized_width],
+            antialias=True,
+        )
+        left = (self.size - resized_width) // 2
+        top = (self.size - resized_height) // 2
+        right = self.size - resized_width - left
+        bottom = self.size - resized_height - top
+        return TF.pad(
+            image,
+            [left, top, right, bottom],
+            fill=self.fill,
+        )
 
 
 class ResidualBlock(nn.Module):

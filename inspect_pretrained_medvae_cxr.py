@@ -125,6 +125,12 @@ def main():
     )
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument(
+        "--resize-mode",
+        choices=["crop", "pad"],
+        default="crop",
+        help="crop matches old experiments; pad preserves the full CXR",
+    )
+    parser.add_argument(
         "--split", choices=["train", "val", "test", "all"], default="test"
     )
     parser.add_argument("--n", type=int, default=10)
@@ -144,6 +150,7 @@ def main():
         image_size=args.image_size,
         split=None if args.split == "all" else args.split,
         train=False,
+        resize_mode=args.resize_mode,
     )
     if args.source_indices:
         source_indices = [
@@ -263,6 +270,7 @@ def main():
         "medvae_models": model_names,
         "posterior": args.posterior,
         "image_size": args.image_size,
+        "resize_mode": args.resize_mode,
         "split": args.split,
         "source_indices": [
             int(sample["row"]["_source_index"])

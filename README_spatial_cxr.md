@@ -188,6 +188,22 @@ python inspect_pretrained_medvae_cxr.py \
 posterior mode 而非随机采样，保证不同模型在同一批样本上的重建比较可重复。
 输出包含逐样本 comparison panel、`metrics.csv` 和 `summary.json`。
 
+MIMIC-CXR-JPG 原图的纵横比并不统一。旧实验使用
+`Resize(shorter_edge) + CenterCrop`，会裁掉长边的一部分。评估预训练
+MedVAE 时可以改为保持完整图像比例并补黑边：
+
+```bash
+python inspect_pretrained_medvae_cxr.py \
+  --features ../datasets/vlm_radiology_report_generation/output/mimic_cxr_features.parquet \
+  --cxr-root ../datasets/vlm_radiology_report_generation/mimic-cxr-jpg-2.1.0.physionet.org \
+  --medvae-models medvae_4_3_2d \
+  --image-size 256 \
+  --resize-mode pad \
+  --split test \
+  --source-indices 10615,89249,11071,75129,50337,49949,80335,11806,22798,99360 \
+  --out "runs/pretrained_medvae_native256_pad_same10_$(date +%Y%m%d_%H%M%S)"
+```
+
 ## S1: 接回三模态 shared latent
 
 S1 使用：
