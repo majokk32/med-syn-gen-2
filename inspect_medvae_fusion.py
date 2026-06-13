@@ -18,7 +18,10 @@ from torchvision import transforms
 from transformers import AutoTokenizer
 
 from medsyn.data import clean_text
-from medsyn.medvae_fusion import MedVAEFusionAutoencoder
+from medsyn.medvae_fusion import (
+    MedVAEFusionAutoencoder,
+    load_s2_checkpoint,
+)
 from medsyn.schema import (
     BINARY_COLS,
     CONTINUOUS_COLS,
@@ -95,20 +98,6 @@ def generate_note(model, tokenizer, z_global, max_tokens: int) -> str:
         if stop is not None and next_token == stop:
             break
     return tokenizer.decode(generated, skip_special_tokens=True)
-
-
-def load_s2_checkpoint(model, checkpoint_path: str) -> dict:
-    state = torch.load(checkpoint_path, map_location="cpu")
-    if "model" not in state:
-        raise KeyError("S2 checkpoint must contain a model block")
-    missing, unexpected = model.load_state_dict(
-        state["model"], strict=False
-    )
-    if unexpected:
-        raise RuntimeError(f"unexpected S2 keys: {unexpected}")
-    if not all(key.startswith("medvae.") for key in missing):
-        raise RuntimeError(f"unexpected missing S2 keys: {missing}")
-    return state
 
 
 def main() -> None:

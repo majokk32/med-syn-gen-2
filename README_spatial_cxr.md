@@ -279,6 +279,107 @@ python train_medvae_fusion.py \
   2>&1 | tee "${OUT}.log"
 ```
 
+## S3: z_global 到 z_spatial 的 Conditional Diffusion
+
+S3 冻结完整的 S2 和 MedVAE，只训练 spatial latent U-Net：
+
+```text
+CXR + EHR + report
+  -> frozen S2 encoder
+  -> z_global (512)
+
+CXR
+  -> frozen MedVAE encoder
+  -> z_spatial (3x128x128)
+  -> per-channel normalization
+  -> add diffusion noise
+
+noisy z_spatial + timestep + z_global
+  -> conditional U-Net
+  -> predicted noise
+
+sampled z_spatial
+  -> frozen MedVAE decoder
+  -> generated CXR
+```
+
+训练包含 cosine noise schedule、Min-SNR weighting、EMA、classifier-free
+condition dropout。MedVAE latent 的逐通道 mean/std 会在训练开始时估计并保存进
+checkpoint，生成时必须使用同一组统计量。
+
+GPU integration check：
+
+```bash
+STAMP=$(date +%Y%m%d_%H%M%S)
+OUT="runs/conditional_spatial_diffusion_s3_smoke_${STAMP}"
+
+python train_conditional_spatial_diffusion.py \
+  --features ../datasets/vlm_radiology_report_generation/output/mimic_cxr_features.parquet \
+  --cxr-root ../datasets/vlm_radiology_report_generation/mimic-cxr-jpg-2.1.0.physionet.org \
+  --s2-ckpt runs/medvae_fusion_s2_20260612_164826/ckpt_best.pt \
+  --output "$OUT" \
+  --batch-size 1 \
+  --num-workers 4 \
+  --stats-batches 2 \
+  --limit-train-rows 20 \
+  --limit-val-rows 10 \
+  --max-val-batches 2 \
+  --max-steps 0 \
+  2>&1 | tee "${OUT}.log"
+```
+
+第一轮正式训练建议先跑 5000 steps：
+
+```bash
+STAMP=$(date +%Y%m%d_%H%M%S)
+OUT="$PWD/runs/conditional_spatial_diffusion_s3_${STAMP}"
+LOG="$PWD/runs/conditional_spatial_diffusion_s3_${STAMP}.log"
+
+sbatch \
+  --job-name=medsyn_s3 \
+  --partition=gpu \
+  --cpus-per-task=4 \
+  --mem=96G \
+  --gres=gpu:a40:1 \
+  --time=04:00:00 \
+  --chdir="$PWD" \
+  --output="$LOG" \
+  --wrap="bash -lc '
+    source /home1/yikeyang/envs/medvae_eval_env/bin/activate
+    python train_conditional_spatial_diffusion.py \
+      --features ../datasets/vlm_radiology_report_generation/output/mimic_cxr_features.parquet \
+      --cxr-root ../datasets/vlm_radiology_report_generation/mimic-cxr-jpg-2.1.0.physionet.org \
+      --s2-ckpt runs/medvae_fusion_s2_20260612_164826/ckpt_best.pt \
+      --output \"$OUT\" \
+      --batch-size 2 \
+      --num-workers 4 \
+      --stats-batches 128 \
+      --max-steps 5000 \
+      --val-every 500 \
+      --max-val-batches 20
+  '"
+```
+
+完成后在严格 test subject 上生成：
+
+```bash
+STAMP=$(date +%Y%m%d_%H%M%S)
+
+python inspect_conditional_spatial_diffusion.py \
+  --ckpt "$OUT/ckpt_best.pt" \
+  --features ../datasets/vlm_radiology_report_generation/output/mimic_cxr_features.parquet \
+  --cxr-root ../datasets/vlm_radiology_report_generation/mimic-cxr-jpg-2.1.0.physionet.org \
+  --split test \
+  --n 10 \
+  --sample-steps 50 \
+  --guidance-scale 1.5 \
+  --out "runs/conditional_spatial_diffusion_test10_${STAMP}"
+```
+
+每张 panel 从左到右是 real、MedVAE reconstruction、conditional diffusion
+generation、zero-condition generation。最后一列用于判断 U-Net 是否真的使用
+`z_global`。
+
 ## S1: 接回三模态 shared latent
 
 S1 使用：

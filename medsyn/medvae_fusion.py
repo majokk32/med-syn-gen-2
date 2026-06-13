@@ -290,6 +290,24 @@ def load_legacy_multimodal_weights(
     return state
 
 
+def load_s2_checkpoint(
+    model: MedVAEFusionAutoencoder,
+    checkpoint_path: str,
+) -> dict:
+    """Load an S2 checkpoint while restoring MedVAE from its official weights."""
+    state = torch.load(checkpoint_path, map_location="cpu")
+    if "model" not in state:
+        raise KeyError("S2 checkpoint must contain a model block")
+    missing, unexpected = model.load_state_dict(
+        state["model"], strict=False
+    )
+    if unexpected:
+        raise RuntimeError(f"unexpected S2 keys: {unexpected}")
+    if not all(key.startswith("medvae.") for key in missing):
+        raise RuntimeError(f"unexpected missing S2 keys: {missing}")
+    return state
+
+
 def trainable_parameters(model: nn.Module) -> list[nn.Parameter]:
     return [
         parameter
